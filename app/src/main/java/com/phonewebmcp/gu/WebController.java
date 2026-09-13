@@ -532,11 +532,23 @@ public class WebController {
             try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
             vis = checkVisibility();
         }
+        // 检测 rAF 节流：低活跃窗口（无人触摸/锁屏）会被系统压到极低帧率，
+        // WebGL 模型渲染不出来 → 截图空白。诊断字段 rafFps 供上层识别。
+        double rafFps = checkRafFps();
+        if (rafFps < 15) {
+            forceRenderWakeup();
+            for (int i = 0; i < 10; i++) {
+                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                rafFps = checkRafFps();
+                if (rafFps >= 15) break;
+            }
+        }
         // 优先 PixelCopy：截取真实渲染帧（与屏幕所见一致，避免 view.draw 拿到旧帧）
         JSONObject pc = tryPixelCopy();
         if (pc != null) {
             try {
                 if (vis != null) pc.put("vis", vis);
+                pc.put("rafFps", Math.round(rafFps * 10) / 10.0);
             } catch (Exception ignored) {}
             return pc;
         }
@@ -559,8 +571,28 @@ public class WebController {
         }, 8000);
         try {
             if (vis != null) fb.put("vis", vis);
+            fb.put("rafFps", Math.round(rafFps * 10) / 10.0);
         } catch (Exception ignored) {}
         return fb;
+    }
+
+    /** 检测 rAF 实际帧率（低活跃窗口会被系统节流到个位数 fps） */
+    private double checkRafFps() {
+        try {
+            JSONObject e1 = evaluate("window.__rafN=(window.__rafN||0)+1;"
+                    + "if(!window.__rafRun){window.__rafRun=true;"
+                    + "(function l(){window.__rafN++;requestAnimationFrame(l)})();}"
+                    + "window.__rafN", 3000);
+            if (!e1.optBoolean("ok", false)) return -1;
+            int start = Integer.parseInt(jsonUnescape(e1.optString("result")));
+            try { Thread.sleep(600); } catch (InterruptedException ignored) {}
+            JSONObject e2 = evaluate("window.__rafN", 3000);
+            if (!e2.optBoolean("ok", false)) return -1;
+            int end = Integer.parseInt(jsonUnescape(e2.optString("result")));
+            return (end - start) / 0.6;
+        } catch (Exception e) {
+            return -1;
+        }
     }
 
     /** 强制恢复 WebView 页面可见性与渲染（rAF/WebGL） */
