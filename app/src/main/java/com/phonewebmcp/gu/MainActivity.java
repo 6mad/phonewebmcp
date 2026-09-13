@@ -67,6 +67,7 @@ public class MainActivity extends Activity {
         String url = "";
         int progress = 0;
         boolean loading = false;
+        int colorIdx = 0;
         Button tabButton;
 
         Tab(int id, WebView wv) {
@@ -112,6 +113,7 @@ public class MainActivity extends Activity {
         WebView wv = new WebView(this);
         setupWebView(wv);
         final Tab tab = new Tab(++tabSeq, wv);
+        tab.colorIdx = tabSeq - 1;
         tabs.add(tab);
 
         // 标签条按钮
@@ -124,6 +126,7 @@ public class MainActivity extends Activity {
         b.setMinimumHeight(0);
         b.setMinimumWidth(0);
         b.setBackgroundColor(Color.TRANSPARENT);
+        b.setAllCaps(false);
         tab.tabButton = b;
         b.setOnClickListener(v -> switchTab(tab));
         b.setOnLongClickListener(v -> { closeTab(tab); return true; });
@@ -159,6 +162,7 @@ public class MainActivity extends Activity {
         tab.webView.requestLayout();
         container.requestLayout();
         renderTabStrip();
+        scrollTabIntoView(tab);
     }
 
     private void closeTab(Tab tab) {
@@ -178,17 +182,43 @@ public class MainActivity extends Activity {
         renderTabStrip();
     }
 
-    /** 渲染标签条：标题 + 当前高亮 + 加载中显示「…」 */
+    /** 标签胶囊配色：现代柔和色板，按创建顺序分配保证相邻不同色 */
+    private static final int[] TAB_COLORS = {
+            0xFF3B82F6, 0xFF8B5CF6, 0xFF06B6D4, 0xFF10B981,
+            0xFFF59E0B, 0xFFEC4899, 0xFF6366F1, 0xFFEF4444
+    };
+
+    /** 渲染标签条：胶囊样式 + 相邻不同色 + 当前高亮 + 加载中显示「…」 */
     private void renderTabStrip() {
+        float d = getResources().getDisplayMetrics().density;
         for (Tab t : tabs) {
             String label = t.loading ? t.title + "…" : t.title;
             if (label.length() > 9) label = label.substring(0, 9) + "…";
             t.tabButton.setText(label);
+            int c = TAB_COLORS[t.colorIdx % TAB_COLORS.length];
             boolean active = (t == current);
-            t.tabButton.setBackgroundColor(active ? Color.rgb(37, 99, 235) : Color.TRANSPARENT);
-            t.tabButton.setTextColor(active ? Color.WHITE : Color.rgb(100, 116, 139));
+            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            bg.setCornerRadius(12 * d);
+            if (active) {
+                bg.setColor(c);
+            } else {
+                bg.setColor(Color.argb(0x24, Color.red(c), Color.green(c), Color.blue(c)));
+                bg.setStroke((int) (1 * d), Color.argb(0x50, Color.red(c), Color.green(c), Color.blue(c)));
+            }
+            t.tabButton.setBackground(bg);
+            t.tabButton.setTextColor(active ? Color.WHITE : c);
         }
-        tabScroll.post(() -> tabScroll.fullScroll(View.FOCUS_RIGHT));
+    }
+
+    /** 滚动标签条，让目标标签居中可见（点击哪个就定位到哪个，而不是滚到末尾） */
+    private void scrollTabIntoView(Tab t) {
+        if (t == null || t.tabButton == null) return;
+        tabScroll.post(() -> {
+            View v = t.tabButton;
+            int x = v.getLeft();
+            int target = Math.max(0, x - tabScroll.getWidth() / 2 + v.getWidth() / 2);
+            tabScroll.smoothScrollTo(target, 0);
+        });
     }
 
     // ---------- 慢加载提示 ----------
@@ -239,6 +269,31 @@ public class MainActivity extends Activity {
             public void setEngine(String template, String name) {
                 getSharedPreferences("cfg", MODE_PRIVATE)
                         .edit().putString("searchEngine", template).apply();
+            }
+
+            @android.webkit.JavascriptInterface
+            public void saveBookmarks(String json) {
+                getSharedPreferences("cfg", MODE_PRIVATE)
+                        .edit().putString("bookmarks", json).apply();
+            }
+
+            @android.webkit.JavascriptInterface
+            public void saveServices(String json) {
+                getSharedPreferences("cfg", MODE_PRIVATE)
+                        .edit().putString("services", json).apply();
+            }
+
+            @android.webkit.JavascriptInterface
+            public void saveTheme(String t) {
+                getSharedPreferences("cfg", MODE_PRIVATE)
+                        .edit().putString("theme", t).apply();
+            }
+
+            @android.webkit.JavascriptInterface
+            public void reloadHome() {
+                handler.post(() -> {
+                    if (current != null) current.webView.loadUrl(buildHomePage());
+                });
             }
         }, "NativeBridge");
 
@@ -331,116 +386,37 @@ public class MainActivity extends Activity {
     // ================= 起始页 =================
 
     private String buildHomePage() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("<!DOCTYPE html><html><head><meta charset=utf-8><title>新标签页</title>")
-          .append("<meta name=viewport content=\"width=device-width,initial-scale=1\">")
-          .append("<style>")
-          .append("*{margin:0;padding:0;box-sizing:border-box}")
-          .append("body{font-family:system-ui,-apple-system,sans-serif;background:linear-gradient(160deg,#eef2ff 0%,#f8fafc 45%,#eff6ff 100%);min-height:100vh;padding:34px 18px}")
-          .append(".wrap{max-width:640px;margin:0 auto;text-align:center}")
-          .append(".greet{font-size:13px;color:#94a3b8;margin-bottom:4px}")
-          .append(".logo{font-size:32px;font-weight:700;color:#1e293b;letter-spacing:2px;margin-bottom:26px}")
-          .append(".logo span{color:#2563eb}")
-          .append(".search{position:relative;max-width:560px;margin:0 auto}")
-          .append(".search input{width:100%;padding:15px 100px 15px 20px;border-radius:28px;border:1px solid #e2e8f0;background:#fff;font-size:16px;outline:none;box-shadow:0 4px 16px rgba(30,41,59,.06)}")
-          .append(".search input:focus{border-color:#2563eb;box-shadow:0 4px 20px rgba(37,99,235,.16)}")
-          .append(".eng{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:#eff6ff;color:#2563eb;border:1px solid #dbeafe;border-radius:20px;padding:8px 13px;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:4px;max-width:150px}")
-          .append(".eng b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}")
-          .append(".panel{display:none;position:fixed;left:0;right:0;top:0;bottom:0;background:rgba(15,23,42,.45);z-index:10;justify-content:center;align-items:flex-start;padding-top:10vh}")
-          .append(".panel.show{display:flex}")
-          .append(".sheet{background:#fff;border-radius:20px;width:min(560px,92vw);max-height:68vh;overflow:auto;padding:18px 14px;box-shadow:0 20px 60px rgba(0,0,0,.25)}")
-          .append(".sec{font-size:12px;color:#94a3b8;margin:14px 6px 8px}")
-          .append(".grid2{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}")
-          .append(".en{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:12px;cursor:pointer;border:1px solid transparent}")
-          .append(".en:hover{background:#f1f5f9}")
-          .append(".en.cur{background:#eff6ff;border-color:#bfdbfe;color:#2563eb}")
-          .append(".en .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}")
-          .append(".dot.c{background:#2563eb}.dot.a{background:#8b5cf6}.dot.s{background:#10b981}")
-          .append(".en .nm{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}")
-          .append("h3{font-size:14px;color:#64748b;margin:28px 0 4px;text-align:left;padding-left:8px}")
-          .append(".mark{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px}")
-          .append(".site{display:block;background:#fff;border-radius:14px;padding:14px 6px;text-decoration:none;color:#1e293b;box-shadow:0 1px 4px rgba(30,41,59,.05);border:1px solid #eef2f7}")
-          .append(".site .ic{width:38px;height:38px;border-radius:10px;margin:0 auto 6px;display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff;font-weight:600}")
-          .append(".site .nm{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}")
-          .append(".site.add{border:1px dashed #cbd5e1;background:transparent;color:#64748b}")
-          .append(".svcs{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:20px}")
-          .append(".svc{background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:7px 14px;font-size:12px;color:#475569;text-decoration:none;box-shadow:0 1px 3px rgba(30,41,59,.04)}")
-          .append(".foot{color:#cbd5e1;font-size:11px;margin-top:26px}")
-          .append("</style></head><body>")
-          .append("<div class=wrap>")
-          .append("<div class=greet id=greet></div>")
-          .append("<div class=logo>古<span>月</span></div>")
-          .append("<div class=search>")
-          .append("<input id=q placeholder=\"搜索，或输入网址\" onkeydown=\"if(event.key==='Enter')doSearch()\">")
-          .append("<button class=eng onclick=toggle()><b id=engName></b> ▾</button>")
-          .append("</div>")
-          .append("<div id=panel class=panel onclick=\"if(event.target===this)closePanel()\">")
-          .append("<div class=sheet>")
-          .append("<div class=sec>✨ 常用搜索</div><div class=grid2 id=gCommon></div>")
-          .append("<div class=sec>🤖 AI 搜索</div><div class=grid2 id=gAi></div>")
-          .append("<div class=sec>🛠 本机服务</div><div class=grid2 id=gSvc></div>")
-          .append("</div></div>")
-          .append("<h3>我的收藏</h3>")
-          .append("<div class=mark id=marks></div>")
-          .append("<div class=svcs id=svcs></div>")
-          .append("<div class=foot>古月 · WebView 调试浏览器</div>")
-          .append("</div>");
-
-        // ---- JS 数据 ----
-        StringBuilder c = new StringBuilder();
-        StringBuilder a = new StringBuilder();
-        for (String[] e : SearchEngines.LIST) {
-            String item = "[" + jsStr(e[0]) + "," + jsStr(e[2]) + "]";
-            if (e[1].equals("ai")) {
-                if (a.length() > 0) a.append(",");
-                a.append(item);
-            } else {
-                if (c.length() > 0) c.append(",");
-                c.append(item);
-            }
-        }
-        String services = "[['古月控制台','http://127.0.0.1:8765/','🔧'],['pi-web-ui','http://127.0.0.1:8800/','🖥'],['小说阅读器','http://127.0.0.1:8888/','📖']]";
-        String curTpl = getCurrentEngine();
-        String curName = SearchEngines.nameOf(curTpl);
-        String marksJson = loadBookmarks().toString();
-
-        sb.append("<script>")
-          .append("const E=[").append(c).append("],A=[").append(a).append("],S=").append(services)
-          .append(",CUR=").append(jsStr(curTpl)).append(",CURNAME=").append(jsStr(curName))
-          .append(",MARKS=").append(marksJson).append(";")
-          .append("const COLORS=['#2563eb','#059669','#d97706','#dc2626','#7c3aed','#0891b2','#db2777','#4f46e5'];")
-          .append("let cur=CUR,curName=CURNAME;")
-          .append("function engItem(name,url,cls){const d=document.createElement('div');d.className='en'+(url===cur?' cur':'');")
-          .append("d.innerHTML='<span class=\"dot '+cls+'\"></span><span class=\"nm\">'+name+'</span>';d.onclick=()=>pick(url,name);return d;}")
-          .append("function renderEngines(){const gc=document.getElementById('gCommon'),ga=document.getElementById('gAi');gc.innerHTML='';ga.innerHTML='';")
-          .append("E.forEach(e=>gc.appendChild(engItem(e[0],e[1],'c')));A.forEach(e=>ga.appendChild(engItem(e[0],e[1],'a')));")
-          .append("const gs=document.getElementById('gSvc');gs.innerHTML='';S.forEach(e=>{const d=engItem(e[0],e[1],'s');d.onclick=()=>{location.href=e[1]};gs.appendChild(d)});")
-          .append("document.getElementById('engName').textContent=curName;}")
-          .append("function pick(u,n){cur=u;curName=n;document.getElementById('engName').textContent=n;")
-          .append("try{NativeBridge.setEngine(u,n)}catch(e){}closePanel();renderEngines();}")
-          .append("function toggle(){document.getElementById('panel').classList.add('show')}")
-          .append("function closePanel(){document.getElementById('panel').classList.remove('show')}")
-          .append("function doSearch(){const q=document.getElementById('q').value.trim();if(!q)return;location.href=cur.replace('{q}',encodeURIComponent(q))}")
-          .append("function greet(){const h=new Date().getHours();const g=h<5?'夜深了':h<9?'早上好':h<12?'上午好':h<14?'中午好':h<18?'下午好':'晚上好';")
-          .append("document.getElementById('greet').textContent=g+' · '+['周日','周一','周二','周三','周四','周五','周六'][new Date().getDay()]}")
-          .append("function renderMarks(){const m=document.getElementById('marks');m.innerHTML='';")
-          .append("MARKS.forEach((b,i)=>{const a=document.createElement('a');a.className='site';a.href=b.url;")
-          .append("a.innerHTML='<div class=\"ic\" style=\"background:'+COLORS[i%COLORS.length]+'\">'+b.title.charAt(0)+'</div><div class=\"nm\"></div>';")
-          .append("a.querySelector('.nm').textContent=b.title;m.appendChild(a)});")
-          .append("const add=document.createElement('a');add.className='site add';add.href='app://newtab';")
-          .append("add.innerHTML='<div class=\"ic\" style=\"background:transparent;color:#94a3b8\">＋</div><div class=\"nm\">新标签</div>';m.appendChild(add);}")
-          .append("function renderSvcs(){const sv=document.getElementById('svcs');S.forEach(e=>{const a=document.createElement('a');a.className='svc';a.href=e[1];a.textContent=e[2]+' '+e[0];sv.appendChild(a)});}")
-          .append("renderEngines();greet();renderMarks();renderSvcs();")
-          .append("</script></body></html>");
-
-        // data URL 编码：URLEncoder 把空格编码为 +，但 data URL 解码不还原 +，必须换成 %20
-        String encoded = URLEncoder.encode(sb.toString(), StandardCharsets.UTF_8).replace("+", "%20");
-        return "data:text/html;charset=utf-8," + encoded;
+        return HomePageBuilder.build(
+                loadBookmarks().toString(),
+                loadServices().toString(),
+                getCurrentEngine(),
+                SearchEngines.nameOf(getCurrentEngine()),
+                getThemeMode());
     }
 
-    private static String jsStr(String s) {
-        if (s == null) return "''";
-        return "'" + s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ") + "'";
+    /** 快捷导航数据（无数据时写入默认服务） */
+    private JSONArray loadServices() {
+        try {
+            SharedPreferences sp = getSharedPreferences("cfg", MODE_PRIVATE);
+            String stored = sp.getString("services", "");
+            if (!stored.isEmpty()) return new JSONArray(stored);
+        } catch (Exception ignored) {}
+        JSONArray def = new JSONArray();
+        try {
+            def.put(new JSONObject().put("name", "古月控制台").put("url", "http://127.0.0.1:8765/").put("icon", "\uD83D\uDD27"));
+            def.put(new JSONObject().put("name", "pi-web-ui").put("url", "http://127.0.0.1:8800/").put("icon", "\uD83D\uDDA5"));
+            def.put(new JSONObject().put("name", "小说阅读器").put("url", "http://127.0.0.1:8888/").put("icon", "\uD83D\uDCD6"));
+            saveServices(def);
+        } catch (Exception ignored) {}
+        return def;
+    }
+
+    private void saveServices(JSONArray arr) {
+        getSharedPreferences("cfg", MODE_PRIVATE).edit().putString("services", arr.toString()).apply();
+    }
+
+    private String getThemeMode() {
+        return getSharedPreferences("cfg", MODE_PRIVATE).getString("theme", "");
     }
 
     private String getCurrentEngine() {
@@ -527,6 +503,34 @@ public class MainActivity extends Activity {
 
     // ================= 按钮 & 菜单 =================
 
+    /** 全屏切换：收起/展开标签栏和地址栏（带动画），网页占满屏幕 */
+    private boolean fullscreen = false;
+
+    private void toggleFullscreen() {
+        fullscreen = !fullscreen;
+        final View tagBar = findViewById(R.id.tag_bar);
+        final View addrBar = findViewById(R.id.addr_bar);
+        final Button fs = findViewById(R.id.btn_fullscreen);
+        int dur = 280;
+        if (fullscreen) {
+            fs.setText("↓");
+            tagBar.animate().translationY(-tagBar.getHeight()).alpha(0f).setDuration(dur)
+                    .withEndAction(() -> tagBar.setVisibility(View.GONE));
+            addrBar.animate().translationY(-tagBar.getHeight() - addrBar.getHeight()).alpha(0f).setDuration(dur)
+                    .withEndAction(() -> addrBar.setVisibility(View.GONE));
+        } else {
+            fs.setText("^");
+            tagBar.setVisibility(View.VISIBLE);
+            addrBar.setVisibility(View.VISIBLE);
+            tagBar.setTranslationY(-tagBar.getHeight());
+            tagBar.setAlpha(0f);
+            addrBar.setTranslationY(-tagBar.getHeight() - addrBar.getHeight());
+            addrBar.setAlpha(0f);
+            tagBar.animate().translationY(0).alpha(1f).setDuration(dur);
+            addrBar.animate().translationY(0).alpha(1f).setDuration(dur);
+        }
+    }
+
     /** 沉浸式状态栏 + 毛玻璃（API 31+ 真实模糊，旧版半透明透出） */
     private void setupEdgeToEdge() {
         try {
@@ -545,10 +549,27 @@ public class MainActivity extends Activity {
                 getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND);
                 getWindow().setBackgroundBlurRadius(18);
             }
-            // 沉浸式后内容延伸到状态栏下：标签栏补状态栏高度 padding
+            // 沉浸式后内容延伸到状态栏下：标签栏用系统 insets 精确贴合状态栏高度
+            // （比 status_bar_height 资源更准，兼容挖孔/手势条等差异）
             View tagBar = findViewById(R.id.tag_bar);
-            tagBar.setPadding(tagBar.getPaddingLeft(), getStatusBarHeight() + 1,
-                    tagBar.getPaddingRight(), tagBar.getPaddingBottom());
+            tagBar.setOnApplyWindowInsetsListener((v, insets) -> {
+                int top = 0;
+                if (android.os.Build.VERSION.SDK_INT >= 30) {
+                    top = insets.getInsets(android.view.WindowInsets.Type.statusBars()).top;
+                } else {
+                    top = insets.getSystemWindowInsetTop();
+                }
+                v.setPadding(v.getPaddingLeft(), top, v.getPaddingRight(), v.getPaddingBottom());
+                // 全屏按钮与标签栏同行对齐
+                View fs = findViewById(R.id.btn_fullscreen);
+                if (fs != null) {
+                    android.view.ViewGroup.MarginLayoutParams lp =
+                            (android.view.ViewGroup.MarginLayoutParams) fs.getLayoutParams();
+                    lp.topMargin = top + 8;
+                    fs.setLayoutParams(lp);
+                }
+                return insets;
+            });
         } catch (Exception e) {
             android.util.Log.w("WebViewTool", "edge-to-edge 失败: " + e);
         }
@@ -562,6 +583,7 @@ public class MainActivity extends Activity {
     }
 
     private void bindButtons() {
+        findViewById(R.id.btn_fullscreen).setOnClickListener(v -> toggleFullscreen());
         findViewById(R.id.btn_back).setOnClickListener(v -> {
             if (current != null && current.webView.canGoBack()) current.webView.goBack();
         });
@@ -606,7 +628,7 @@ public class MainActivity extends Activity {
                         case 0: newTab(null); break;
                         case 1: showBookmarks(); break;
                         case 2: if (current != null) addBookmark(current.title, current.url); break;
-                        case 3: if (current != null) current.webView.loadUrl(getString(R.string.home_url)); break;
+                        case 3: if (current != null) current.webView.loadUrl(buildHomePage()); break;
                         case 4: showUaMenu(); break;
                         case 5: showSettingsPanel(); break;
                         case 6: showCachePanel(); break;

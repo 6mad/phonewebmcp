@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
     android:background="#FFFFFF">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
 
     <!-- 标签条（第一行，毛玻璃半透明） -->
     <LinearLayout
@@ -13,8 +17,8 @@
         android:orientation="horizontal"
         android:gravity="center_vertical"
         android:background="#F2FFFFFF"
-        android:paddingTop="1dp"
-        android:paddingBottom="1dp">
+        android:paddingTop="0dp"
+        android:paddingBottom="0dp">
 
         <HorizontalScrollView
             android:id="@+id/tab_scroll"
@@ -35,16 +39,26 @@
             android:id="@+id/btn_new_tab"
             android:layout_width="42dp"
             android:layout_height="32dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
             android:text="＋"
             android:textSize="15sp"
             android:textColor="#334155"
             android:background="@android:color/transparent"
             android:gravity="center" />
 
+        <!-- ^ 全屏按钮的锚点占位（透明，36dp，与 overlay 按钮同宽） -->
+        <View
+            android:layout_width="18dp"
+            android:layout_height="1dp"
+            android:visibility="invisible" />
+
         <Button
             android:id="@+id/btn_menu"
             android:layout_width="42dp"
             android:layout_height="32dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
             android:text="⋮"
             android:textSize="18sp"
             android:textColor="#334155"
@@ -54,6 +68,7 @@
 
     <!-- 地址栏（第二行） -->
     <LinearLayout
+        android:id="@+id/addr_bar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
@@ -66,8 +81,8 @@
 
         <Button
             android:id="@+id/btn_back"
-            android:layout_width="38dp"
-            android:layout_height="38dp"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
             android:text="←"
             android:textSize="15sp"
             android:textColor="#334155"
@@ -76,8 +91,8 @@
 
         <Button
             android:id="@+id/btn_forward"
-            android:layout_width="38dp"
-            android:layout_height="38dp"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
             android:text="→"
             android:textSize="15sp"
             android:textColor="#334155"
@@ -86,8 +101,8 @@
 
         <Button
             android:id="@+id/btn_reload"
-            android:layout_width="38dp"
-            android:layout_height="38dp"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
             android:text="↻"
             android:textSize="15sp"
             android:textColor="#334155"
@@ -97,7 +112,7 @@
         <EditText
             android:id="@+id/url_bar"
             android:layout_width="0dp"
-            android:layout_height="36dp"
+            android:layout_height="30dp"
             android:layout_weight="1"
             android:inputType="textUri"
             android:imeOptions="actionGo"
@@ -111,8 +126,8 @@
 
         <Button
             android:id="@+id/btn_bookmark"
-            android:layout_width="38dp"
-            android:layout_height="38dp"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
             android:text="☆"
             android:textSize="16sp"
             android:textColor="#334155"
@@ -139,4 +154,18 @@
             android:visibility="gone"
             android:progressTint="#2563EB" />
     </FrameLayout>
-</LinearLayout>
+    </LinearLayout>
+
+    <!-- 全屏切换按钮（悬浮于标签栏加号和设置之间，浅色半透明） -->
+    <Button
+        android:id="@+id/btn_fullscreen"
+        android:layout_width="18dp"
+        android:layout_height="32dp"
+        android:layout_gravity="top|end"
+        android:layout_marginEnd="42dp"
+        android:text="^"
+        android:textSize="16sp"
+        android:textColor="#334155"
+        android:background="@drawable/fs_btn_bg"
+        android:gravity="center" />
+</FrameLayout>
