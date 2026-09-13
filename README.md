@@ -26,6 +26,10 @@ It also works as a normal multi-tab browser when no agent is driving it.
 
 ## Features / 功能
 
+| | | |
+|---|---|---|
+| ![主页](docs/screenshots/home.png) | ![引擎面板](docs/screenshots/engines.png) | ![Web 控制台](docs/screenshots/console.png) |
+
 - **真实浏览器**：多标签（最多 8）、收藏、29 个搜索引擎（含中文 AI 搜索：秘塔/Kimi/豆包）、UA 切换（11 种）、缓存管理、Cookie、JS 控制台
 - **自动化 API**：navigate / search / scroll / click(selector·text·coordinate) / fill / evaluate / wait / waitFor / dom / links / screenshot / tabs / bookmarks / settings / cache
 - **MCP 标准适配层**：零依赖 Python，任何 MCP 客户端（Claude Code、Cursor、pi…）即插即用

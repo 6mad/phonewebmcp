@@ -146,6 +146,10 @@ public class MainActivity extends Activity {
         controller.attach(tab.webView);
         urlBar.setText(tab.url);
         progress.setProgress(tab.progress);
+        // 强制重新布局：后台/冻结期间 addView 的布局请求可能被丢弃，
+        // 导致新建标签的 WebView 从未被 layout（视口 0、截图失败）
+        tab.webView.requestLayout();
+        container.requestLayout();
         renderTabStrip();
     }
 

@@ -519,6 +519,15 @@ public class WebController {
 
     public JSONObject screenshot() {
         return ui(wv -> {
+            // 兑底：若从未被布局（后台创建/冻结后），手动 measure + layout
+            if (wv.getWidth() <= 0 || wv.getHeight() <= 0) {
+                android.view.View parent = (android.view.View) wv.getParent();
+                int w = parent != null && parent.getWidth() > 0 ? parent.getWidth() : 1080;
+                int h = parent != null && parent.getHeight() > 0 ? parent.getHeight() : 1920;
+                wv.measure(android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY),
+                        android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY));
+                wv.layout(0, 0, w, h);
+            }
             if (wv.getWidth() <= 0 || wv.getHeight() <= 0) throw new IllegalStateException("webview 尚未布局");
             int w = wv.getWidth();
             int h = wv.getHeight();
