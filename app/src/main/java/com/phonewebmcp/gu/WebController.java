@@ -134,7 +134,12 @@ public class WebController {
     }
 
     public JSONObject stop() {
-        return call(WebView::stopLoading, 5000);
+        return call(wv -> {
+            wv.stopLoading();
+            if (Build.VERSION.SDK_INT >= 19) {
+                wv.evaluateJavascript("try{window.stop();}catch(e){}", null);
+            }
+        }, 5000);
     }
 
     // ---------- JS 执行（阻塞等待结果） ----------

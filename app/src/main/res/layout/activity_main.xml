@@ -5,13 +5,14 @@
     android:orientation="vertical"
     android:background="#FFFFFF">
 
-    <!-- 标签条（第一行，紧凑） -->
+    <!-- 标签条（第一行，毛玻璃半透明） -->
     <LinearLayout
+        android:id="@+id/tag_bar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:background="#1E293B"
+        android:background="#F2FFFFFF"
         android:paddingTop="1dp"
         android:paddingBottom="1dp">
 
@@ -36,8 +37,8 @@
             android:layout_height="32dp"
             android:text="＋"
             android:textSize="15sp"
-            android:textColor="#FFFFFF"
-            android:background="#1E293B"
+            android:textColor="#334155"
+            android:background="@android:color/transparent"
             android:gravity="center" />
 
         <Button
@@ -46,8 +47,8 @@
             android:layout_height="32dp"
             android:text="⋮"
             android:textSize="18sp"
-            android:textColor="#FFFFFF"
-            android:background="#1E293B"
+            android:textColor="#334155"
+            android:background="@android:color/transparent"
             android:gravity="center" />
     </LinearLayout>
 
@@ -57,7 +58,7 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:background="#F8FAFC"
+        android:background="#F5FFFFFF"
         android:paddingTop="3dp"
         android:paddingBottom="3dp"
         android:paddingLeft="6dp"
@@ -124,13 +125,18 @@
         android:id="@+id/webview_container"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1">
 
-    <ProgressBar
-        android:id="@+id/progress"
-        style="?android:attr/progressBarStyleHorizontal"
-        android:layout_width="match_parent"
-        android:layout_height="2dp"
-        android:max="100"
-        android:progress="0" />
+        <!-- 加载进度条：悬浮于网页内容顶部，仅在加载时可见（GONE 不占位） -->
+        <ProgressBar
+            android:id="@+id/progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_gravity="top"
+            android:max="100"
+            android:progress="0"
+            android:visibility="gone"
+            android:progressTint="#2563EB" />
+    </FrameLayout>
 </LinearLayout>

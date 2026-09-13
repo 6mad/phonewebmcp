@@ -47,6 +47,7 @@ public class MainActivity extends Activity {
     private HorizontalScrollView tabScroll;
     private EditText urlBar;
     private ProgressBar progress;
+    private Button reloadButton;
     private FrameLayout container;
 
     // ---- 状态 ----
@@ -65,6 +66,7 @@ public class MainActivity extends Activity {
         String title = "新标签页";
         String url = "";
         int progress = 0;
+        boolean loading = false;
         Button tabButton;
 
         Tab(int id, WebView wv) {
@@ -80,11 +82,14 @@ public class MainActivity extends Activity {
 
         urlBar = findViewById(R.id.url_bar);
         progress = findViewById(R.id.progress);
+        reloadButton = findViewById(R.id.btn_reload);
         tabStrip = findViewById(R.id.tab_strip);
         tabScroll = findViewById(R.id.tab_scroll);
         container = findViewById(R.id.webview_container);
 
         controller = new WebController(this);
+
+        setupEdgeToEdge();
 
         bindButtons();
         setupApiServer();
@@ -112,12 +117,13 @@ public class MainActivity extends Activity {
         // 标签条按钮
         Button b = new Button(this);
         b.setTextSize(11);
-        b.setTextColor(Color.WHITE);
+        b.setTextColor(Color.rgb(100, 116, 139));
         b.setGravity(Gravity.CENTER);
         b.setPadding(14, 0, 14, 0);
         b.setMinHeight(0);
         b.setMinimumHeight(0);
         b.setMinimumWidth(0);
+        b.setBackgroundColor(Color.TRANSPARENT);
         tab.tabButton = b;
         b.setOnClickListener(v -> switchTab(tab));
         b.setOnLongClickListener(v -> { closeTab(tab); return true; });
@@ -146,6 +152,8 @@ public class MainActivity extends Activity {
         controller.attach(tab.webView);
         urlBar.setText(tab.url);
         progress.setProgress(tab.progress);
+        progress.bringToFront();
+        progress.setVisibility(tab.loading ? View.VISIBLE : View.GONE);
         // 强制重新布局：后台/冻结期间 addView 的布局请求可能被丢弃，
         // 导致新建标签的 WebView 从未被 layout（视口 0、截图失败）
         tab.webView.requestLayout();
@@ -170,17 +178,39 @@ public class MainActivity extends Activity {
         renderTabStrip();
     }
 
-    /** 渲染标签条：标题 + 当前高亮 */
+    /** 渲染标签条：标题 + 当前高亮 + 加载中显示「…」 */
     private void renderTabStrip() {
         for (Tab t : tabs) {
-            String label = t.title;
-            if (label.length() > 8) label = label.substring(0, 8) + "…";
+            String label = t.loading ? t.title + "…" : t.title;
+            if (label.length() > 9) label = label.substring(0, 9) + "…";
             t.tabButton.setText(label);
             boolean active = (t == current);
-            t.tabButton.setBackgroundColor(active ? Color.rgb(37, 99, 235) : Color.rgb(51, 65, 85));
-            t.tabButton.setTextColor(active ? Color.WHITE : Color.rgb(203, 213, 225));
+            t.tabButton.setBackgroundColor(active ? Color.rgb(37, 99, 235) : Color.TRANSPARENT);
+            t.tabButton.setTextColor(active ? Color.WHITE : Color.rgb(100, 116, 139));
         }
         tabScroll.post(() -> tabScroll.fullScroll(View.FOCUS_RIGHT));
+    }
+
+    // ---------- 慢加载提示 ----------
+
+    private final java.util.Map<Tab, Runnable> slowTimers = new java.util.HashMap<>();
+
+    private void startSlowTimer(final Tab t) {
+        Runnable old = slowTimers.remove(t);
+        if (old != null) handler.removeCallbacks(old);
+        Runnable r = () -> {
+            if (t.loading && t == current && findTab(t.webView) != null) {
+                toast("页面加载较慢（已超过 10 秒），可点击 ✕ 停止");
+            }
+            slowTimers.remove(t);
+        };
+        slowTimers.put(t, r);
+        handler.postDelayed(r, 10000);
+    }
+
+    private void cancelSlowTimer(Tab t) {
+        Runnable r = slowTimers.remove(t);
+        if (r != null) handler.removeCallbacks(r);
     }
 
     // ================= WebView =================
@@ -230,13 +260,25 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                Tab t = findTab(view);
+                if (t != null) {
+                    t.loading = true;
+                    renderTabStrip();
+                }
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 Tab t = findTab(view);
                 if (t != null) {
+                    t.loading = false;
                     t.title = view.getTitle() == null ? t.title : view.getTitle();
                     t.url = view.getUrl() == null ? url : view.getUrl();
+                    cancelSlowTimer(t);
                     if (t == current) {
                         urlBar.setText(t.url);
+                        reloadButton.setText("↻");
                     }
                     renderTabStrip();
                 }
@@ -249,10 +291,21 @@ public class MainActivity extends Activity {
                 Tab t = findTab(view);
                 if (t != null) {
                     t.progress = newProgress;
+                    t.loading = newProgress < 100;
                     if (t == current) {
+                        boolean loading = t.loading;
+                        reloadButton.setText(loading ? "✕" : "↻");
                         progress.setProgress(newProgress);
-                        progress.setVisibility(newProgress >= 100 ? View.INVISIBLE : View.VISIBLE);
+                        // 进度条悬浮于网页之上：WebView 是后 addView 的子层，必须提到顶层
+                        progress.bringToFront();
+                        progress.setVisibility(loading ? View.VISIBLE : View.GONE);
                         controller.onProgress(newProgress);
+                    }
+                    renderTabStrip();
+                    if (t.loading) {
+                        startSlowTimer(t);
+                    } else {
+                        cancelSlowTimer(t);
                     }
                 }
             }
@@ -474,6 +527,40 @@ public class MainActivity extends Activity {
 
     // ================= 按钮 & 菜单 =================
 
+    /** 沉浸式状态栏 + 毛玻璃（API 31+ 真实模糊，旧版半透明透出） */
+    private void setupEdgeToEdge() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                getWindow().setDecorFitsSystemWindows(false);
+                getWindow().getInsetsController().setSystemBarsAppearance(
+                        android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS,
+                        android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+            } else {
+                getWindow().getDecorView().setSystemUiVisibility(
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                                | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+            }
+            getWindow().setStatusBarColor(Color.TRANSPARENT);
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND);
+                getWindow().setBackgroundBlurRadius(18);
+            }
+            // 沉浸式后内容延伸到状态栏下：标签栏补状态栏高度 padding
+            View tagBar = findViewById(R.id.tag_bar);
+            tagBar.setPadding(tagBar.getPaddingLeft(), getStatusBarHeight() + 1,
+                    tagBar.getPaddingRight(), tagBar.getPaddingBottom());
+        } catch (Exception e) {
+            android.util.Log.w("WebViewTool", "edge-to-edge 失败: " + e);
+        }
+    }
+
+    private int getStatusBarHeight() {
+        int resId = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        int h = resId > 0 ? getResources().getDimensionPixelSize(resId) : 0;
+        if (h == 0) h = Math.round(24 * getResources().getDisplayMetrics().density);
+        return h;
+    }
+
     private void bindButtons() {
         findViewById(R.id.btn_back).setOnClickListener(v -> {
             if (current != null && current.webView.canGoBack()) current.webView.goBack();
@@ -482,7 +569,12 @@ public class MainActivity extends Activity {
             if (current != null && current.webView.canGoForward()) current.webView.goForward();
         });
         findViewById(R.id.btn_reload).setOnClickListener(v -> {
-            if (current != null) current.webView.reload();
+            if (current == null) return;
+            if (current.loading) {
+                stopCurrentLoading();
+            } else {
+                current.webView.reload();
+            }
         });
         findViewById(R.id.btn_new_tab).setOnClickListener(v -> newTab(null));
         findViewById(R.id.btn_bookmark).setOnClickListener(v -> {
@@ -565,6 +657,26 @@ public class MainActivity extends Activity {
                     }
                 })
                 .show();
+    }
+
+    /** 彻底停止当前页面加载：stopLoading + window.stop() + 延迟复查 */
+    private void stopCurrentLoading() {
+        final WebView wv = current.webView;
+        try {
+            wv.stopLoading();
+            if (android.os.Build.VERSION.SDK_INT >= 19) {
+                wv.evaluateJavascript("try{window.stop();}catch(e){}", null);
+            }
+        } catch (Exception ignored) {}
+        // 兜底复查：部分网络栈 stopLoading 后仍继续，稍后再补一刀
+        handler.postDelayed(() -> {
+            Tab t = current;
+            if (t != null && t.webView == wv && t.webView.getProgress() < 100) {
+                try {
+                    wv.stopLoading();
+                } catch (Exception ignored) {}
+            }
+        }, 500);
     }
 
     private void goUrl() {
@@ -964,6 +1076,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         if (apiServer != null) apiServer.stop();
+        handler.removeCallbacksAndMessages(null);
         for (Tab t : tabs) {
             try {
                 t.webView.destroy();
