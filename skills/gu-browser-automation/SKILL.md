@@ -1,3 +1,8 @@
+---
+name: gu-browser-automation
+description: 用手机上安装的「古月」WebView 浏览器（包名 com.phonewebmcp.gu，即 WebView 调试器）做页面自动化：导航、搜索、滚动、点击（选择器/文字/坐标）、填表、等待、截图、多标签、收藏，全部通过本机 JSON API（127.0.0.1:8765）控制，类似 Playwright/Selenium 但跑在真实手机上。用于打开真实网页、自动点击/填表/翻页、网页调试（改 UA、注入 JS、查 Cookie）、浏览器截图配合视觉验证。
+---
+
 # 古月浏览器自动化（gu-browser-automation）
 
 用手机上安装的「古月」WebView 浏览器（包名 `com.phonewebmcp.gu`，即 WebView 调试器）做页面自动化：导航、搜索、滚动、点击（选择器/文字/坐标）、填表、等待元素、截图、多标签、收藏。全部通过本机 JSON API（`127.0.0.1:8765`）控制，类似 Playwright/Selenium 的能力但跑在真实手机上。
@@ -50,7 +55,7 @@ python3 $PY screenshot --out ~/tmp/page.png        # 截图 → describe_image �
 | `POST /api/waitFor` | `{"selector":".result","timeoutMs":10000}` | 等待元素出现 |
 | `GET /api/dom` | - | 正文文本(前3000) + 标题 + 前50链接 + meta |
 | `GET /api/links` | - | 链接列表 |
-| `GET /api/screenshot` | - | base64 PNG（data:image/png;base64,） |
+| `GET /api/screenshot` | - | base64 PNG（data:image/png;base64,）。截取**窗口真实渲染帧**（含浏览器 UI，与屏幕一致）；App 需在前台，否则回退旧帧可能不准 |
 
 ### 数据与设置
 | 端点 | body | 说明 |
@@ -88,6 +93,7 @@ python3 $PY screenshot --out ~/tmp/pg.png
 ## 注意事项
 
 - **vivo 冻结**：App 后台会被冻结（HTTP 000），`am start` 唤醒后 2-3 秒恢复；gu.py 每次自动唤醒。进程不会被杀，token 不变
+- **渲染帧滞后**：App 后台/刚唤醒时 navigate/tab-new 后 document 已更新但屏幕渲染帧可能还是旧页——API 数据（status/dom）与截图可能不一致。**截图前务必确保 App 在前台**（gu.py 自动 wake），操作后等 2-3 秒再截图
 - **data URL 主页**：`/api/status` 的 title 可能是 `data:text/html;...` 开头=新标签主页，属正常
 - **页面未就绪**：导航后先 `wait`/`waitFor` 再交互；SPA 页面优先 `waitFor selector`
 - **点击选择器失效**：优先 `--text`（按可见文字）或 `--x --y` 坐标点击；移动端站点选择器与桌面版不同，先 `eval` 侦察

@@ -122,7 +122,9 @@ def main():
         print("已唤醒")
         return
 
-    wake()
+    # 注意：不在此处无条件 am start 唤醒——
+    # 频繁 am start 会触发国产 ROM 重建 Activity（标签全部丢失）。
+    # call() 内部仅在 API 不可达时才自动唤醒重试。
 
     if args.cmd == "status":
         print(json.dumps(out(call("/api/status"))["result"], ensure_ascii=False, indent=1))

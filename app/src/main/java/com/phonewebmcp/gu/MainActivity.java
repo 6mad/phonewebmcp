@@ -98,14 +98,29 @@ public class MainActivity extends Activity {
         // 启动前台常驻服务（防冻结）
         startForegroundServiceCompat();
 
-        // 首个标签
+        // 首个标签：恢复上次会话或新建主页
         String openUrl = handleIntent(getIntent());
-        newTab(openUrl != null ? openUrl : null);
+        JSONArray saved = loadSavedTabs();
+        if (saved != null && saved.length() > 0) {
+            // 恢复会话标签（Activity 重建/进程重启后不丢失）
+            for (int i = 0; i < saved.length(); i++) {
+                JSONObject t = saved.optJSONObject(i);
+                if (t == null) continue;
+                newTab(t.optString("url", null), i == saved.length() - 1);
+            }
+            if (openUrl != null) newTab(openUrl, true);
+        } else {
+            newTab(openUrl != null ? openUrl : null, true);
+        }
     }
 
     // ================= 标签管理 =================
 
     private void newTab(String url) {
+        newTab(url, true);
+    }
+
+    private void newTab(String url, boolean makeCurrent) {
         if (tabs.size() >= MAX_TABS) {
             toast("标签过多（最多 " + MAX_TABS + " 个），请先关闭一些");
             return;
@@ -115,6 +130,7 @@ public class MainActivity extends Activity {
         final Tab tab = new Tab(++tabSeq, wv);
         tab.colorIdx = tabSeq - 1;
         tabs.add(tab);
+        tab.url = url == null ? "" : url;
 
         // 标签条按钮
         Button b = new Button(this);
@@ -135,14 +151,25 @@ public class MainActivity extends Activity {
         container.addView(wv, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        switchTab(tab);
-
-        if (url != null) {
-            wv.loadUrl(url);
+        if (makeCurrent) {
+            switchTab(tab);
         } else {
-            wv.loadUrl(buildHomePage());
-            tab.title = "新标签页";
+            tab.webView.setVisibility(View.GONE);
         }
+
+        // 关键修复：新 WebView 首次 loadUrl 会丢失渲染首帧（白屏）。
+        // 先加载 about:blank 预热渲染 surface（触发首帧），再加载真实页面。
+        wv.loadUrl("about:blank");
+        wv.postDelayed(() -> {
+            try {
+                if (url != null) {
+                    wv.loadUrl(url);
+                } else {
+                    wv.loadUrl(buildHomePage());
+                    tab.title = "新标签页";
+                }
+            } catch (Exception ignored) {}
+        }, 400);
         renderTabStrip();
     }
 
@@ -153,6 +180,11 @@ public class MainActivity extends Activity {
         }
         current = tab;
         controller.attach(tab.webView);
+        // 切换到该标签时强制恢复渲染（后台/冻结期间 WebView 渲染可能暂停）
+        try {
+            tab.webView.onResume();
+        } catch (Exception ignored) {}
+        tab.webView.invalidate();
         urlBar.setText(tab.url);
         progress.setProgress(tab.progress);
         progress.bringToFront();
@@ -207,6 +239,31 @@ public class MainActivity extends Activity {
             }
             t.tabButton.setBackground(bg);
             t.tabButton.setTextColor(active ? Color.WHITE : c);
+        }
+        saveTabs();
+    }
+
+    /** 持久化标签会话（Activity 重建/进程重启后恢复） */
+    private void saveTabs() {
+        try {
+            JSONArray arr = new JSONArray();
+            for (Tab t : tabs) {
+                String u = t.url;
+                if (u == null || u.isEmpty()) {
+                    try { u = t.webView.getUrl() == null ? "" : t.webView.getUrl(); } catch (Exception ignored) {}
+                }
+                arr.put(new JSONObject().put("url", u == null ? "" : u).put("title", t.title));
+            }
+            getSharedPreferences("cfg", MODE_PRIVATE).edit().putString("tabs", arr.toString()).apply();
+        } catch (Exception ignored) {}
+    }
+
+    private JSONArray loadSavedTabs() {
+        try {
+            SharedPreferences sp = getSharedPreferences("cfg", MODE_PRIVATE);
+            return new JSONArray(sp.getString("tabs", "[]"));
+        } catch (Exception e) {
+            return new JSONArray();
         }
     }
 
@@ -514,12 +571,16 @@ public class MainActivity extends Activity {
         int dur = 280;
         if (fullscreen) {
             fs.setText("↓");
+            // 隐藏状态栏图标（网页内容已延伸到状态栏区域，区域保持网页顶部颜色）
+            setStatusBarHidden(true);
             tagBar.animate().translationY(-tagBar.getHeight()).alpha(0f).setDuration(dur)
                     .withEndAction(() -> tagBar.setVisibility(View.GONE));
             addrBar.animate().translationY(-tagBar.getHeight() - addrBar.getHeight()).alpha(0f).setDuration(dur)
                     .withEndAction(() -> addrBar.setVisibility(View.GONE));
         } else {
             fs.setText("^");
+            setStatusBarHidden(false);
+            setStatusBarIconsLight(true);
             tagBar.setVisibility(View.VISIBLE);
             addrBar.setVisibility(View.VISIBLE);
             tagBar.setTranslationY(-tagBar.getHeight());
@@ -529,6 +590,53 @@ public class MainActivity extends Activity {
             tagBar.animate().translationY(0).alpha(1f).setDuration(dur);
             addrBar.animate().translationY(0).alpha(1f).setDuration(dur);
         }
+    }
+
+    /** 隐藏/显示状态栏（仅隐藏图标；内容延伸使状态栏区域保持网页顶部颜色） */
+    private void setStatusBarHidden(boolean hidden) {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                android.view.WindowInsetsController c = getWindow().getInsetsController();
+                if (c != null) {
+                    if (hidden) {
+                        c.hide(android.view.WindowInsets.Type.statusBars());
+                    } else {
+                        c.show(android.view.WindowInsets.Type.statusBars());
+                    }
+                }
+            } else {
+                View decor = getWindow().getDecorView();
+                int flags = View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN;
+                if (hidden) flags |= View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
+                decor.setSystemUiVisibility(flags);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /** 状态栏图标颜色：浅色网页用深色图标，深色网页用浅色图标（跟随网页背景亮度） */
+    private void adaptStatusBarIcons() {
+        if (android.os.Build.VERSION.SDK_INT < 23 || current == null) return;
+        try {
+            current.webView.evaluateJavascript(
+                    "(function(){var c=getComputedStyle(document.body).backgroundColor;"
+                            + "var m=c.match(/\\d+/g);if(!m||m.length<3)return 'light';"
+                            + "var l=(+m[0]*299 + +m[1]*587 + +m[2]*114)/1000;return l>150?'light':'dark';})()",
+                    value -> setStatusBarIconsLight(!"\"dark\"".equals(value)));
+        } catch (Exception ignored) {}
+    }
+
+    private void setStatusBarIconsLight(boolean light) {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                getWindow().getInsetsController().setSystemBarsAppearance(
+                        light ? android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS : 0,
+                        android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+            } else {
+                getWindow().getDecorView().setSystemUiVisibility(
+                        (light ? View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR : 0)
+                                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
+            }
+        } catch (Exception ignored) {}
     }
 
     /** 沉浸式状态栏 + 毛玻璃（API 31+ 真实模糊，旧版半透明透出） */
@@ -756,6 +864,11 @@ public class MainActivity extends Activity {
         }
 
         @Override
+        public JSONObject toggleFullscreen() {
+            return uiOp(() -> MainActivity.this.toggleFullscreen());
+        }
+
+        @Override
         public JSONArray listTabs() {
             final JSONArray out = new JSONArray();
             uiOp(() -> {
@@ -766,7 +879,9 @@ public class MainActivity extends Activity {
                             .put("title", t.title)
                             .put("url", t.url)
                             .put("progress", t.progress)
-                            .put("current", t == current));
+                            .put("current", t == current)
+                            .put("shown", t.webView.isShown())
+                            .put("visibility", t.webView.getVisibility()));
                 }
             });
             return out;

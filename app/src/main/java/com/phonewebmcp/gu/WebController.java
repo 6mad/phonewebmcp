@@ -523,8 +523,11 @@ public class WebController {
     // ---------- 截图 ----------
 
     public JSONObject screenshot() {
+        // 优先 PixelCopy：截取真实渲染帧（与屏幕所见一致，避免 view.draw 拿到旧帧）
+        JSONObject pc = tryPixelCopy();
+        if (pc != null) return pc;
+        // 回退：view.draw + measure 兑底
         return ui(wv -> {
-            // 兑底：若从未被布局（后台创建/冻结后），手动 measure + layout
             if (wv.getWidth() <= 0 || wv.getHeight() <= 0) {
                 android.view.View parent = (android.view.View) wv.getParent();
                 int w = parent != null && parent.getWidth() > 0 ? parent.getWidth() : 1080;
@@ -538,11 +541,76 @@ public class WebController {
             int h = wv.getHeight();
             Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
             wv.draw(new android.graphics.Canvas(bmp));
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
-            bmp.recycle();
-            return "data:image/png;base64," + android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP);
+            return toDataUrl(bmp);
         }, 8000);
+    }
+
+    /** PixelCopy 截取窗口真实渲染帧（含浏览器 UI，与用户屏幕一致） */
+    private JSONObject tryPixelCopy() {
+        if (Build.VERSION.SDK_INT < 26) return null;
+        try {
+            final CountDownLatch latch = new CountDownLatch(1);
+            final Bitmap[] b = new Bitmap[1];
+            final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+            activity.runOnUiThread(() -> {
+                try {
+                    final WebView wv = webView;
+                    final android.view.View decor = activity.getWindow().getDecorView();
+                    final Runnable grab = () -> {
+                        try {
+                            int dw = decor.getWidth();
+                            int dh = decor.getHeight();
+                            if (dw <= 0 || dh <= 0) { latch.countDown(); return; }
+                            final Bitmap fb = Bitmap.createBitmap(dw, dh, Bitmap.Config.ARGB_8888);
+                            try {
+                                android.view.PixelCopy.request(activity.getWindow(), fb, r -> {
+                                    if (r == android.view.PixelCopy.SUCCESS) b[0] = fb;
+                                    latch.countDown();
+                                }, ui);
+                            } catch (Exception e) {
+                                latch.countDown();
+                            }
+                        } catch (Throwable t) {
+                            latch.countDown();
+                        }
+                    };
+                    if (wv != null) {
+                        try { wv.onResume(); } catch (Exception ignored) {}
+                        // 强制重建渲染 surface（WebView 渲染白屏的经典修复）
+                        try {
+                            wv.setVisibility(android.view.View.GONE);
+                            wv.setVisibility(android.view.View.VISIBLE);
+                        } catch (Exception ignored) {}
+                        wv.invalidate();
+                        // 等 WebView 渲染完成再截（避免拿到旧帧/白帧）
+                        try {
+                            wv.postVisualStateCallback(2000, new WebView.VisualStateCallback() {
+                                @Override
+                                public void onComplete(long requestId) {
+                                    ui.post(grab);
+                                }
+                            });
+                            return;
+                        } catch (Exception ignored) {}
+                    }
+                    grab.run();
+                } catch (Throwable t) {
+                    latch.countDown();
+                }
+            });
+            if (!latch.await(4000, TimeUnit.MILLISECONDS)) return null;
+            if (b[0] == null) return null;
+            return okVal(toDataUrl(b[0]));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String toDataUrl(Bitmap bmp) {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
+        bmp.recycle();
+        return "data:image/png;base64," + android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP);
     }
 
     private volatile int progress = 0;
