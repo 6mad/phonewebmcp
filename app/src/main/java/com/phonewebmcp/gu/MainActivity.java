@@ -183,6 +183,7 @@ public class MainActivity extends Activity {
         // 切换到该标签时强制恢复渲染（后台/冻结期间 WebView 渲染可能暂停）
         try {
             tab.webView.onResume();
+            tab.webView.dispatchWindowVisibilityChanged(View.VISIBLE);
         } catch (Exception ignored) {}
         tab.webView.invalidate();
         urlBar.setText(tab.url);

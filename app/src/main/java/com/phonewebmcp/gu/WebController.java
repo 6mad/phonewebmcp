@@ -523,11 +523,25 @@ public class WebController {
     // ---------- 截图 ----------
 
     public JSONObject screenshot() {
+        // WebGL/动画页面依赖 rAF。visibilityState=hidden 可能是脏状态
+        // （vivo 冻结恢复后 WebView 未收到可见性回调，实际屏幕显示正常），
+        // 因此不依赖它做失败判断，而是强制恢复渲染后再截。
+        String vis = checkVisibility();
+        if ("hidden".equals(vis)) {
+            forceRenderWakeup();
+            try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
+            vis = checkVisibility();
+        }
         // 优先 PixelCopy：截取真实渲染帧（与屏幕所见一致，避免 view.draw 拿到旧帧）
         JSONObject pc = tryPixelCopy();
-        if (pc != null) return pc;
+        if (pc != null) {
+            try {
+                if (vis != null) pc.put("vis", vis);
+            } catch (Exception ignored) {}
+            return pc;
+        }
         // 回退：view.draw + measure 兑底
-        return ui(wv -> {
+        JSONObject fb = ui(wv -> {
             if (wv.getWidth() <= 0 || wv.getHeight() <= 0) {
                 android.view.View parent = (android.view.View) wv.getParent();
                 int w = parent != null && parent.getWidth() > 0 ? parent.getWidth() : 1080;
@@ -543,6 +557,41 @@ public class WebController {
             wv.draw(new android.graphics.Canvas(bmp));
             return toDataUrl(bmp);
         }, 8000);
+        try {
+            if (vis != null) fb.put("vis", vis);
+        } catch (Exception ignored) {}
+        return fb;
+    }
+
+    /** 强制恢复 WebView 页面可见性与渲染（rAF/WebGL） */
+    private void forceRenderWakeup() {
+        try {
+            activity.runOnUiThread(() -> {
+                try {
+                    WebView wv = webView;
+                    if (wv == null) return;
+                    wv.onResume();
+                    wv.dispatchWindowVisibilityChanged(android.view.View.VISIBLE);
+                    wv.setVisibility(android.view.View.VISIBLE);
+                    wv.invalidate();
+                } catch (Exception ignored) {}
+            });
+        } catch (Exception ignored) {}
+    }
+
+    /** 检查页面 visibilityState（hidden 时 WebGL/动画 rAF 暂停） */
+    private String checkVisibility() {
+        try {
+            JSONObject e = evaluate("document.visibilityState", 3000);
+            if (e.optBoolean("ok", false)) {
+                String r = e.optString("result", "");
+                if (r.startsWith("\"")) {
+                    try { r = new JSONObject("{\"v\":" + r + "}").getString("v"); } catch (Exception ignored) {}
+                }
+                return r;
+            }
+        } catch (Exception ignored) {}
+        return null;
     }
 
     /** PixelCopy 截取窗口真实渲染帧（含浏览器 UI，与用户屏幕一致） */
@@ -576,7 +625,10 @@ public class WebController {
                     };
                     if (wv != null) {
                         try { wv.onResume(); } catch (Exception ignored) {}
-                        // 强制重建渲染 surface（WebView 渲染白屏的经典修复）
+                        // 强制重建渲染 surface + 恢复页面可见性（WebGL/rAF）
+                        try {
+                            wv.dispatchWindowVisibilityChanged(android.view.View.VISIBLE);
+                        } catch (Exception ignored) {}
                         try {
                             wv.setVisibility(android.view.View.GONE);
                             wv.setVisibility(android.view.View.VISIBLE);
