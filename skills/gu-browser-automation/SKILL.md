@@ -94,6 +94,7 @@ python3 $PY screenshot --out ~/tmp/pg.png
 
 - **vivo 冻结**：App 后台会被冻结（HTTP 000），`am start` 唤醒后 2-3 秒恢复；gu.py 每次自动唤醒。进程不会被杀，token 不变
 - **渲染帧滞后**：App 后台/刚唤醒时 navigate/tab-new 后 document 已更新但屏幕渲染帧可能还是旧页——API 数据（status/dom）与截图可能不一致。**截图前务必确保 App 在前台**（gu.py 自动 wake），操作后等 2-3 秒再截图
+- **WebGL/动画页面截图空白（重要）**：Three.js/WebGL/Canvas 动画依赖 requestAnimationFrame，页面在后台（`visibilityState=hidden`）时浏览器**暂停 rAF** → 模型/动画不渲染，截图只有背景色。这是浏览器标准行为，不是截图 bug。**自动化截图 WebGL 页面前必须保证手机亮屏 + App 真正在前台**（am start 唤醒但屏幕锁定时页面仍 hidden）。截图 API 响应含 `vis` 字段（visible/hidden）可诊断；`/api/screenshot` 检测到 hidden 会自动等 2 秒重试
 - **data URL 主页**：`/api/status` 的 title 可能是 `data:text/html;...` 开头=新标签主页，属正常
 - **页面未就绪**：导航后先 `wait`/`waitFor` 再交互；SPA 页面优先 `waitFor selector`
 - **点击选择器失效**：优先 `--text`（按可见文字）或 `--x --y` 坐标点击；移动端站点选择器与桌面版不同，先 `eval` 侦察
