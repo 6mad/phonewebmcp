@@ -25,6 +25,31 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * MCP 风格：所有控制操作通过 HTTP + JSON 完成，供本机 Termux/脚本/Web 控制台调用。
  */
 public class ApiServer {
+
+
+    // ================= 版本与能力声明 =================
+
+    /** API 版本：新增/变更端点的语义时递增 */
+    public static final String API_VERSION = "1.2";
+
+    /**
+     * 能力清单。客户端应据此判断"该字段/参数是否可用"，而不是匹配版本号字符串。
+     * 每个条目对应一组相关字段或参数：
+     *   navigate_meta     → /api/navigate 返回 beforeUrl / requestedUrl / loading
+     *   navigate_wait     → /api/navigate 支持 wait=1 与 waitTimeoutMs，返回 loadOutcome
+     *   load_state        → /api/status 返回 loading / everLoaded / pageAgeMs
+     *   session_restored  → /api/status 返回 sessionRestored / sessionRestoredUrl
+     *   load_error        → onReceivedError 上报 lastLoadFailed / lastErrorDesc / lastErrorCode
+     *   version_info      → /api/info 返回 apiVersion / appVersionName / appVersionCode
+     */
+    public static final String[] FEATURES = {
+            "navigate_meta",
+            "navigate_wait",
+            "load_state",
+            "session_restored",
+            "load_error",
+            "version_info",
+    };
     private final WebController controller;
     private final int port;
     private final String token;
@@ -40,6 +65,7 @@ public class ApiServer {
         JSONObject newTab(String url);
         JSONObject switchTab(int index);
         JSONObject closeTab(int index);
+        JSONObject toggleFullscreen();
         JSONArray listTabs();
         JSONObject addBookmark(String title, String url);
         JSONObject removeBookmark(int index);
@@ -175,9 +201,20 @@ public class ApiServer {
             case "/api/info":
                 return info();
             // ---- 导航 ----
-            case "/api/navigate":
+            case "/api/navigate": {
                 if (q == null) return err("缺少 url 参数");
-                return withInfo(controller.navigate(q));
+                // wait=1 时阻塞到本次导航真正结束，并返回 loadOutcome/finalUrl/finalTitle，
+                // 使调用方无需依赖 info 里的旧页标题来判断成功与否。
+                Object waitObj = getFirst(req, query, "wait");
+                boolean wait = waitObj != null && ("1".equals(waitObj.toString())
+                        || "true".equalsIgnoreCase(waitObj.toString()));
+                Object toObj = getFirst(req, query, "waitTimeoutMs");
+                long to = 20000;
+                if (toObj != null) {
+                    try { to = Long.parseLong(toObj.toString()); } catch (Exception ignored) {}
+                }
+                return withInfo(controller.navigate(q, wait, to));
+            }
             case "/api/search": {
                 String query2 = (String) getFirst(req, query, "query");
                 String engine = (String) getFirst(req, query, "engine");
@@ -280,6 +317,9 @@ public class ApiServer {
                 if (idx == null) return err("缺少 index 参数");
                 return tabOps.closeTab(Integer.parseInt(idx.toString()));
             }
+            case "/api/fullscreen":
+                if (tabOps == null) return err("tab ops 不可用");
+                return tabOps.toggleFullscreen();
             // ---- 收藏 ----
             case "/api/bookmarks":
                 if (tabOps == null) return err("tab ops 不可用");
@@ -332,7 +372,16 @@ public class ApiServer {
     private JSONObject info() throws Exception {
         JSONObject o = new JSONObject();
         o.put("app", "WebView 调试器");
-        o.put("apiVersion", "1.0");
+        // apiVersion 必须随 API 能力变化而更新——旧版本长期硬编码 "1.0"，
+        // 导致客户端无法判断服务端到底支持哪些端点，只能靠"行为差异"去猜版本
+        // （历史上多次因此误判"新版已安装"）。现在配合 features 一起使用。
+        o.put("apiVersion", API_VERSION);
+        o.put("appVersionName", BuildConfig.VERSION_NAME);
+        o.put("appVersionCode", BuildConfig.VERSION_CODE);
+        // 能力协商：客户端据此判断能否使用某个字段/参数，而不是猜版本号
+        JSONArray feats = new JSONArray();
+        for (String f : FEATURES) feats.put(f);
+        o.put("features", feats);
         o.put("webViewVersion", android.webkit.WebView.getCurrentWebViewPackage() == null ? "unknown"
                 : android.webkit.WebView.getCurrentWebViewPackage().versionName);
         JSONObject s = controller.status();

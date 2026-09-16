@@ -106,7 +106,13 @@ public class MainActivity extends Activity {
             for (int i = 0; i < saved.length(); i++) {
                 JSONObject t = saved.optJSONObject(i);
                 if (t == null) continue;
-                newTab(t.optString("url", null), i == saved.length() - 1);
+                String u = t.optString("url", null);
+                newTab(u, i == saved.length() - 1);
+                // 标记：这个页面是"恢复"来的，不是本次真正加载的。
+                // 自动化脚本据此可识别"status 立刻返回正常数据但其实没导航"。
+                if (i == saved.length() - 1 && u != null && !u.isEmpty()) {
+                    controller.markSessionRestored(u);
+                }
             }
             if (openUrl != null) newTab(openUrl, true);
         } else {
@@ -160,10 +166,24 @@ public class MainActivity extends Activity {
         // 关键修复：新 WebView 首次 loadUrl 会丢失渲染首帧（白屏）。
         // 先加载 about:blank 预热渲染 surface（触发首帧），再加载真实页面。
         wv.loadUrl("about:blank");
+        final String pendingUrl = url;
+        /**
+         * 记录调度延迟加载时的"导航代次"。若 400ms 内有人发起过导航，
+         * 代次会变化，此时必须放弃本次加载，让位于那次导航。
+         *
+         * 注意：这里**不能**用 wv.getUrl() 判断是否还是 about:blank。
+         * 真机冷启动实测发现：新导航在页面 commit 之前 getUrl() 仍返回 about:blank，
+         * 于是判断"没人抢导航"→ 照旧加载主页 → 把外部导航覆盖掉
+         * （表现为"导航了却停在默认标签页"，正是本 bug 的原始症状）。
+         */
+        final int genAtSchedule = controller.navigationGeneration();
         wv.postDelayed(() -> {
             try {
-                if (url != null) {
-                    wv.loadUrl(url);
+                if (controller.navigationGeneration() != genAtSchedule) {
+                    return; // 期间已有导航发生，让位
+                }
+                if (pendingUrl != null) {
+                    wv.loadUrl(pendingUrl);
                 } else {
                     wv.loadUrl(buildHomePage());
                     tab.title = "新标签页";
@@ -171,6 +191,22 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {}
         }, 400);
         renderTabStrip();
+    }
+
+    /**
+     * 带代次跟踪的 loadUrl：URL 栏、主页按钮等直接导航路径都要走这里，
+     * 这样新建标签的延迟初始加载才能正确让位。
+     */
+    private void trackedLoad(WebView wv, String url) {
+        if (wv == null || url == null) return;
+        controller.bumpNavigationGeneration();
+        wv.loadUrl(url);
+    }
+
+    /** 当前标签的 WebView（可能为 null） */
+    private WebView currentWebView() {
+        Tab c = current;
+        return c == null ? null : c.webView;
     }
 
     private void switchTab(Tab tab) {
@@ -350,7 +386,7 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public void reloadHome() {
                 handler.post(() -> {
-                    if (current != null) current.webView.loadUrl(buildHomePage());
+                    if (current != null) trackedLoad(current.webView, buildHomePage());
                 });
             }
         }, "NativeBridge");
@@ -379,10 +415,37 @@ public class MainActivity extends Activity {
                     t.loading = true;
                     renderTabStrip();
                 }
+                // 把加载状态同步给 WebController，供 API 判断导航是否真的生效
+                if (view == currentWebView()) {
+                    controller.onPageStarted(url);
+                }
+            }
+
+            @Override
+            public void onReceivedError(WebView view, android.webkit.WebResourceRequest request,
+                                        android.webkit.WebResourceError error) {
+                // 只关心主框架错误：子资源（图片/脚本）失败不应判定整页导航失败
+                if (request == null || request.isForMainFrame()) {
+                    if (view == currentWebView()) {
+                        int code = 0;
+                        String desc = null;
+                        try {
+                            if (android.os.Build.VERSION.SDK_INT >= 23 && error != null) {
+                                code = error.getErrorCode();
+                                CharSequence c = error.getDescription();
+                                desc = c == null ? null : c.toString();
+                            }
+                        } catch (Exception ignored) {}
+                        controller.onLoadError(code, desc);
+                    }
+                }
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                if (view == currentWebView()) {
+                    controller.onPageFinished(url);
+                }
                 Tab t = findTab(view);
                 if (t != null) {
                     t.loading = false;
@@ -539,7 +602,7 @@ public class MainActivity extends Activity {
                 b.setText("🔖 " + m.optString("title", "书签"));
                 b.setOnClickListener(v -> {
                     String u = arr.optJSONObject(idx).optString("url");
-                    if (current != null) current.webView.loadUrl(u);
+                    if (current != null) trackedLoad(current.webView, u);
                 });
                 b.setOnLongClickListener(v -> {
                     JSONArray a2 = loadBookmarks();
@@ -813,7 +876,7 @@ public class MainActivity extends Activity {
     private void goUrl() {
         String input = urlBar.getText().toString().trim();
         if (input.isEmpty() || current == null) return;
-        current.webView.loadUrl(normalizeUrl(input));
+        trackedLoad(current.webView, normalizeUrl(input));
     }
 
     private String normalizeUrl(String input) {

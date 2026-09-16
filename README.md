@@ -114,7 +114,8 @@ Full docs: [docs/API.md](docs/API.md)
 
 | Area | Endpoints |
 |---|---|
-| Navigation | `/api/navigate` `/api/search` `/api/back` `/api/forward` `/api/reload` `/api/status` `/api/history` |
+| Navigation | `/api/navigate` (支持 `wait=1` 确认导航结局) `/api/search` `/api/back` `/api/forward` `/api/reload` `/api/status` `/api/history` |
+| Meta | `/api/info` (版本 + `features` 能力清单) |
 | Interaction | `/api/scroll` `/api/click` `/api/fill` `/api/evaluate` `/api/wait` `/api/waitFor` |
 | Content | `/api/dom` `/api/links` `/api/screenshot` |
 | Tabs | `/api/tabs` `/api/tab/new` `/api/tab/switch` `/api/tab/close` |
@@ -123,6 +124,11 @@ Full docs: [docs/API.md](docs/API.md)
 | Settings | `/api/settings` (userAgent / javaScript / domStorage / cacheMode / safeBrowsing / mixedContent ...) |
 
 Auth: header `X-Api-Token: <token>` or `?token=` query param.
+
+> **导航确认**：App 会恢复上次会话的标签，且 `/api/navigate` 是乐观返回，
+> 所以单看返回值**无法判断导航是否生效**（冷启动后 `status` 会返回一个完全正常的旧页面）。
+> 请使用 `wait=1` 或轮询 `status.pageAgeMs` / `sessionRestored` 来确认，
+> 详见 [docs/API.md](docs/API.md#加载状态与导航确认)。
 
 ## Search Engines / 搜索引擎 (29)
 

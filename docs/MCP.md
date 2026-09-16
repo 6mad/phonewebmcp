@@ -52,5 +52,9 @@ Agent: tools/call navigate {"url": "https://www.bilibili.com"}
 ## 注意事项
 
 - App 必须在同一台设备上运行（API 在 127.0.0.1 回环）
+- **导航后务必确认真的生效**：App 会恢复上次会话的标签，`navigate` 的返回是
+  乐观的（其 `info.title` 往往是上一个页面的标题）。冷启动后 `status` 可能立刻
+  返回一个正常的旧页面，看起来像"已打开"。请用 `navigate?wait=1` 并检查
+  `loadOutcome`，或轮询 `status.pageAgeMs` / `sessionRestored` 来判断
 - 若长时间未操作被系统冻结，适配层会自动 `am start` 唤醒（需要能在设备上执行
   `am` 命令的环境，如 Termux 或 ADB shell）

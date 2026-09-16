@@ -27,12 +27,102 @@ public class WebController {
     private final Activity activity;
     private volatile WebView webView;
 
+    // ---------- 页面加载状态（供 API 判断导航是否真的生效）---------
+    /** 当前是否正在加载中 */
+    private volatile boolean loading = false;
+    /** 本次页面开始加载的时间戳（SystemClock 墙钟毫秒），0 表示未知 */
+    private volatile long pageStartedAt = 0;
+    /** 上一次通过 API 请求导航的目标地址 */
+    private volatile String lastRequestedUrl = null;
+    /**
+     * 会话恢复的标签地址。
+     * App 冷启动会从 SharedPreferences 恢复上次的标签，这些页面在第一毫秒就能返回
+     * 看似正常的 url/title，使调用方（自动化脚本）误以为导航成功。
+     * 标记出来供 API 层提示"这是恢复的旧页"。
+     */
+    private volatile String sessionRestoredUrl = null;
+    /** 是否发生过至少一次页面加载完成（用于判断"从未加载"的初始状态） */
+    private volatile boolean everLoaded = false;
+    /**
+     * 主框架加载是否失败。
+     * 由 WebViewClient.onReceivedError 直接给出（含错误码与描述），
+     * 比"读标题里有没有『网页无法打开』"可靠得多——
+     * 后者既依赖 WebView 的标题更新时机（实测会滞后于 loading 状态），
+     * 又依赖系统语言（非中文环境下标题不同，判断会完全失效）。
+     */
+    private volatile boolean lastLoadFailed = false;
+    private volatile String lastErrorDesc = null;
+    private volatile int lastErrorCode = 0;
+
+    /**
+     * 导航代次计数器：每次"显式发起导航"就 +1。
+     *
+     * 用途：新建标签时会先加载 about:blank 预热渲染，再用 postDelayed(400ms) 加载
+     * 真实页或主页。若在这 400ms 内外部（自动化 API / URL 栏）发起了导航，
+     * 那个延迟回调必须让位，否则会把新导航覆盖掉。
+     *
+     * 为什么不能用 WebView.getUrl() 判断：getUrl() 返回的是**当前已提交页面**的地址，
+     * 新导航在页面 commit 之前它仍然返回旧值（实测在这个窗口内仍返回 about:blank），
+     * 所以"还是空白页"并不能说明"没人导航过"。必须用一个独立的、由发起方主动递增的计数器。
+     * （这是真机冷启动实测复现出来的问题，见 v1.3.4）
+     */
+    private volatile int navigationGeneration = 0;
+
+    public int navigationGeneration() {
+        return navigationGeneration;
+    }
+
+    /** 由 Activity 的 URL 栏/主页/前进后退等直接 loadUrl 路径调用 */
+    public void bumpNavigationGeneration() {
+        navigationGeneration++;
+    }
+
     public WebController(Activity activity) {
         this.activity = activity;
     }
 
     public void attach(WebView wv) {
         this.webView = wv;
+    }
+
+    // ---------- 由 MainActivity 的 WebViewClient 回调驱动 ----------
+
+    /** 页面开始加载（可能是新导航，也可能是初始空白页） */
+    public void onPageStarted(String url) {
+        this.loading = true;
+        this.pageStartedAt = System.currentTimeMillis();
+        this.lastLoadFailed = false;
+        this.lastErrorDesc = null;
+        this.lastErrorCode = 0;
+    }
+
+    /** 主框架加载出错（由 WebViewClient.onReceivedError 调用） */
+    public void onLoadError(int errorCode, String description) {
+        this.lastLoadFailed = true;
+        this.lastErrorCode = errorCode;
+        this.lastErrorDesc = description;
+    }
+
+    /** 页面加载完成 */
+    public void onPageFinished(String url) {
+        this.loading = false;
+        this.everLoaded = true;
+        // 若当前页面正是"会话恢复"的那一个，清除标记（说明它已被重新加载过）
+        if (url != null && url.equals(sessionRestoredUrl)) {
+            sessionRestoredUrl = null;
+        }
+    }
+
+    /** 标记某个地址是"会话恢复"得到的，尚未真正重新加载 */
+    public void markSessionRestored(String url) {
+        this.sessionRestoredUrl = url;
+        this.pageStartedAt = 0;
+        this.loading = false;
+        this.everLoaded = false;
+    }
+
+    public boolean isLoading() {
+        return loading;
     }
 
     // ---------- 内部工具 ----------
@@ -118,7 +208,97 @@ public class WebController {
     // ---------- 导航 ----------
 
     public JSONObject navigate(final String url) {
-        return call(wv -> wv.loadUrl(url), 5000);
+        return navigate(url, false, 0);
+    }
+
+    /**
+     * 导航。waitForLoad=true 时阻塞等待该次导航真正结束（加载完成 / 超时），
+     * 并把真实结局（成功/失败页/超时）返回给调用方。
+     *
+     * 默认（waitForLoad=false）仍是立即返回，但会额外给出 requestedUrl / beforeUrl / loading，
+     * 让调用方可以判断"导航是否已生效"，而不必依赖 info 里的旧页标题。
+     */
+    public JSONObject navigate(final String url, boolean waitForLoad, long waitTimeoutMs) {
+        // 注意：WebView.getUrl() 必须在 UI 线程调用，否则在部分机型上返回 null 或抛异常。
+        // 因此 beforeUrl 要在 call() 的 UI 线程 lambda 内部取，不能在 HTTP 线程里取。
+        final String[] beforeHolder = new String[1];
+        JSONObject r = call(wv -> {
+            beforeHolder[0] = wv.getUrl();
+            wv.loadUrl(url);
+        }, 5000);
+        final String before = beforeHolder[0];
+        navigationGeneration++;
+        lastRequestedUrl = url;
+        loading = true;
+        pageStartedAt = System.currentTimeMillis();
+        lastLoadFailed = false;
+        lastErrorDesc = null;
+        lastErrorCode = 0;
+        // 发起导航即取消"会话恢复"标记：此时已在主动加载新页面
+        sessionRestoredUrl = null;
+        try {
+            r.put("beforeUrl", before == null ? JSONObject.NULL : before);
+            r.put("requestedUrl", url);
+            r.put("loading", true);
+        } catch (Exception ignored) {}
+        if (!waitForLoad) {
+            return r;
+        }
+        // 阻塞等待加载结束
+        long deadline = System.currentTimeMillis() + Math.max(waitTimeoutMs, 1000);
+        while (System.currentTimeMillis() < deadline) {
+            if (!loading) {
+                break;
+            }
+            try {
+                Thread.sleep(120);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return withLoadOutcome(r, deadline);
+    }
+
+    /** 给导航结果补上最终结局（供 wait=1 使用） */
+    private JSONObject withLoadOutcome(JSONObject r, long deadline) {
+        try {
+            JSONObject s = status().optJSONObject("result");
+            String finalUrl = s == null ? null : s.optString("url");
+            String title = s == null ? null : s.optString("title");
+            r.put("finalUrl", finalUrl == null ? JSONObject.NULL : finalUrl);
+            r.put("finalTitle", title == null ? JSONObject.NULL : title);
+            r.put("loading", loading);
+            r.put("loadFailed", lastLoadFailed);
+            if (lastErrorDesc != null) r.put("loadError", lastErrorDesc);
+            if (lastErrorCode != 0) r.put("loadErrorCode", lastErrorCode);
+
+            /**
+             * 判断取向：只有当"当前 URL 确实是本次请求的那个"时，才允许用标题/错误标志下结论。
+             *
+             * 原因（实测复现）：WebView 的 title 更新滞后于 loading 状态。
+             * 若上一个页面是失败页（title='网页无法打开'），紧接着导航到正常页，
+             * 会出现 loadFailed=false 但 title 仍是旧失败页标题的窗口期。
+             * 此时若用标题判断，就会把正常页误报为失败页（假阳性）。
+             * 早期版本正是因此出现"偶发误判"，所以这里必须先用 URL 确认"页面已换"。
+             */
+            boolean urlIsRequested = finalUrl != null && lastRequestedUrl != null
+                    && finalUrl.contains(lastRequestedUrl.replaceFirst("/+$", ""));
+
+            if (loading) {
+                r.put("loadOutcome", "timeout");
+            } else if (sessionRestoredUrl != null && finalUrl != null
+                    && finalUrl.equals(sessionRestoredUrl)) {
+                r.put("loadOutcome", "session_restored");
+            } else if (urlIsRequested) {
+                // URL 已确认是本页，此时 title/错误标志才可信
+                r.put("loadOutcome", lastLoadFailed ? "error_page" : "finished");
+            } else {
+                // URL 尚不匹配：不妄下结论，交由客户端就绪门禁继续确认
+                r.put("loadOutcome", lastLoadFailed ? "error_page" : "pending");
+            }
+        } catch (Exception ignored) {}
+        return r;
     }
 
     public JSONObject back() {
@@ -183,6 +363,18 @@ public class WebController {
             o.put("canGoBack", wv.canGoBack());
             o.put("canGoForward", wv.canGoForward());
             o.put("progress", progress);
+            // ---- 加载状态：让调用方能识别"旧页冒充新页" ----
+            o.put("loading", loading);
+            o.put("everLoaded", everLoaded);
+            o.put("pageStartedAt", pageStartedAt);
+            // 页面已存活毫秒数（0 表示未知）：URL 相同但已存在很久 => 很可能是恢复的旧页
+            o.put("pageAgeMs", pageStartedAt > 0 ? System.currentTimeMillis() - pageStartedAt : 0);
+            o.put("lastRequestedUrl", lastRequestedUrl == null ? JSONObject.NULL : lastRequestedUrl);
+            o.put("sessionRestored", sessionRestoredUrl != null);
+            o.put("sessionRestoredUrl", sessionRestoredUrl == null ? JSONObject.NULL : sessionRestoredUrl);
+            o.put("lastLoadFailed", lastLoadFailed);
+            o.put("lastErrorDesc", lastErrorDesc == null ? JSONObject.NULL : lastErrorDesc);
+            o.put("lastErrorCode", lastErrorCode);
             WebSettings s = wv.getSettings();
             JSONObject st = new JSONObject();
             st.put("userAgent", s.getUserAgentString());

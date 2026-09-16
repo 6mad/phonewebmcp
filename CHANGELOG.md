@@ -2,10 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [1.3.5] - 2026-09-16
 
 ### Added
-- Nothing yet
+- **Load-state reporting** in `/api/status`: `loading`, `everLoaded`,
+  `pageStartedAt`, `pageAgeMs`, `lastRequestedUrl`, `sessionRestored`,
+  `sessionRestoredUrl` - lets clients tell a freshly loaded page apart from
+  a session-restored one
+- **`/api/navigate?wait=1`**: blocks until the navigation actually finishes and
+  returns the real outcome (`beforeUrl`, `requestedUrl`, `finalUrl`,
+  `finalTitle`, `loadFailed`, `loadError`, `loadErrorCode`, `loadOutcome`)
+- **Real error reporting** via `WebViewClient.onReceivedError` (main frame only):
+  `lastLoadFailed` / `lastErrorDesc` / `lastErrorCode`, e.g. `-2`
+  (`net::ERR_NAME_NOT_RESOLVED`). Language-independent, unlike guessing from
+  the error page title
+- **Version & capability reporting** in `/api/info`: `apiVersion`,
+  `appVersionName`, `appVersionCode`, and a `features` capability list
+- `race_newtab_test.py`: regression test for the new-tab navigation race
+
+### Fixed
+- **Navigation silently lost on cold start** - a new tab pre-loads
+  `about:blank` to warm up the render surface, then loads the real page (or home
+  page) via `postDelayed(400ms)`. An external navigation issued within that
+  window was overwritten, so the browser appeared stuck on the default tab
+  while the API reported success. The delayed callback now yields when a
+  navigation has happened in the meantime
+- **`WebView.getUrl()` cannot be used to detect an in-flight navigation** - before
+  the new page commits, it still returns the *previous* URL (`about:blank` in
+  practice), so "still blank" does not mean "nobody navigated". Replaced with an
+  explicit `navigationGeneration` counter bumped by every navigation entry point
+- **False "load failed" verdict** - page title updates lag behind the `loading`
+  flag, so a stale error-page title from the previous page could make a
+  successful navigation look like a failure. A verdict is now only drawn once
+  the current URL is confirmed to be the requested one; otherwise `pending`
+
+### Changed
+- `/api/info` no longer hardcodes `apiVersion` to `"1.0"`; client-side version
+  guessing is replaced by capability negotiation
 
 ## [1.1.0] - 2026-09-13
 
